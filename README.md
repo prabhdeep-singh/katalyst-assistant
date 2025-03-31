@@ -1,6 +1,6 @@
 # Katalyst Assistant
 
-An AI-powered chat assistant designed to answer questions about ERP systems (Currently tailored for IFS) and processes, featuring persona-based responses tailored to different user roles. Built with FastAPI (Python) for the backend and React (TypeScript) for the frontend, containerized using Docker Compose.
+An AI-powered chat assistant designed to answer questions about ERP systems (Currently tailored for **IFS ERP**) and processes, featuring persona-based responses tailored to different user roles. Built with FastAPI (Python) for the backend and React (TypeScript) for the frontend, containerized using Docker Compose.
 
 ## Features
 
@@ -24,7 +24,7 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
 *   [Docker](https://docs.docker.com/get-docker/)
 *   [Docker Compose](https://docs.docker.com/compose/install/) (Usually included with Docker Desktop)
 *   [Git](https://git-scm.com/downloads)
-*   A Google Gemini API Key (from [Google AI Studio](https://ai.google.dev/))
+*   A Google Gemini API Key (from [Google AI Studio](hhttps://aistudio.google.com/))
 *   (Optional) Self-signed or valid SSL certificates for Nginx (`cert.pem`, `key.pem` in `nginx/ssl/`). A script `gen-certs.sh` is included for generating self-signed ones for local testing.
 
 ## Getting Started / Installation
@@ -32,7 +32,7 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
 1.  **Clone the Repository:**
     ```bash
     git clone <repository-url>
-    cd katalyst-assistant # IMPORTANT: Rename the cloned folder if needed
+    cd katalyst-assistant
     ```
     *(Replace `<repository-url>` with the actual URL after you create the GitHub repo. Ensure your local project folder is named `katalyst-assistant`)*
 
@@ -116,7 +116,7 @@ Environment variables are used for configuration. Create `.env` files based on t
 
 ## Contributing
 
-Contributions are welcome! Please follow standard GitHub practices (fork, feature branch, pull request). (Add more details if desired).
+Contributions are welcome! Please follow standard GitHub practices (fork, feature branch, pull request).
 
 ## License
 
