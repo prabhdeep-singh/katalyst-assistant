@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
 import os
+import json # Needed for parsing CORS origins
 from dotenv import load_dotenv
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
@@ -54,20 +55,42 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # --- Middleware Setup ---
-# Configure CORS (Place before adding routes)
-# Currently allows all origins ("*"). For production, restrict this list.
-# The BACKEND_CORS_ORIGINS environment variable is NOT currently used.
+
+# Configure CORS
+# Read allowed origins from environment variable
+# Expected format: JSON string array, e.g., '["https://localhost", "https://your-domain.com"]'
+cors_origins_str = os.getenv("BACKEND_CORS_ORIGINS", '[]') # Default to empty list string
+allowed_origins = ["*"] # Default to allow all if parsing fails or env var is empty/missing
+try:
+    parsed_origins = json.loads(cors_origins_str)
+    if isinstance(parsed_origins, list) and len(parsed_origins) > 0:
+        allowed_origins = parsed_origins
+    elif cors_origins_str and cors_origins_str != '[]': # Handle non-empty, non-list strings if needed
+         # Simple comma-separated list fallback (optional)
+         # allowed_origins = [origin.strip() for origin in cors_origins_str.split(',')]
+         logger.warning(f"BACKEND_CORS_ORIGINS is not a valid JSON list, using default '*'. Value: {cors_origins_str}")
+         allowed_origins = ["*"] # Fallback to allow all if format is wrong but var exists
+    else:
+         # If empty list '[]' or not set, default to allowing all for easier local dev
+         logger.info("BACKEND_CORS_ORIGINS not set or empty, allowing all origins ('*').")
+         allowed_origins = ["*"]
+
+except json.JSONDecodeError:
+    logger.error(f"Failed to parse BACKEND_CORS_ORIGINS JSON string: {cors_origins_str}. Allowing all origins ('*').")
+    allowed_origins = ["*"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Example for restricted: ["https://your-frontend-domain.com"]
+    allow_origins=allowed_origins, # Use the parsed or default list
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Log CORS settings
-logger.info(f"CORS settings: allow_origins=*, allow_credentials=True, allow_methods=*, allow_headers=*")
-logger.info(f"Original ALLOWED_ORIGINS setting: {os.getenv('ALLOWED_ORIGINS', '')}")
+logger.info(f"CORS configured with allow_origins: {allowed_origins}")
+
 
 # Initialize services
 prompt_engine = PromptEngine()
@@ -142,7 +165,8 @@ async def process_query(
             history_items = await ChatHistoryService.get_session_messages(
                 db, query_request.session_id, user_id, limit=10
             )
-            chat_history = history_items[::-1]
+            # chat_history = history_items[::-1] # No longer needed, service returns ascending
+            chat_history = history_items
             logger.info(f"Fetched {len(chat_history) if chat_history else 0} history items.")
 
         assistant = EnhancedLLMWrapper(

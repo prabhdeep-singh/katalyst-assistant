@@ -1,42 +1,29 @@
+// Shared types between frontend and backend
+
+// User Roles Enum (ensure this matches backend models/enums.py)
 export enum UserRole {
-    FUNCTIONAL = "functional",
-    TECHNICAL = "technical",
-    ADMINISTRATOR = "administrator",
-    KEY_USER = "key_user",
-    END_USER = "end_user",
-    PROJECT_MANAGER = "project_manager",
-    TESTER = "tester"
+    TECHNICAL = 'technical',
+    FUNCTIONAL = 'functional',
+    ADMINISTRATOR = 'administrator',
+    KEY_USER = 'key_user',
+    END_USER = 'end_user',
+    PROJECT_MANAGER = 'project_manager',
+    TESTER = 'tester',
 }
 
-// Simple history item for guest mode context (matches backend schema)
-export interface SimpleHistoryItem {
-    role: 'user' | 'assistant';
-    content: string;
-}
-
+// Request Payloads
 export interface QueryRequest {
     query: string;
-    role: string;
-    session_id?: number;
-    history?: SimpleHistoryItem[]; // Added history for guest mode
+    role: string; // Keep as string for flexibility in selection
+    session_id?: number | null; // Optional session ID for history
+    history?: SimpleHistoryItem[] | null; // Optional simple history for public queries
 }
 
 export interface FeedbackRequest {
-    response_id: string;
-    rating: number;
+    query: string;
+    response: string;
+    rating: number; // e.g., 1-5
     comment?: string;
-}
-
-export interface Message {
-    type: 'query' | 'response';
-    content: string;
-    disclaimers?: string[];
-}
-
-// Authentication related types
-export interface LoginRequest {
-    username: string;
-    password: string;
 }
 
 export interface RegisterRequest {
@@ -45,63 +32,65 @@ export interface RegisterRequest {
     role: UserRole;
 }
 
-export interface AuthResponse {
-    access_token: string;
-    token_type: string;
-}
-
-export interface User {
-    username: string;
-    role: UserRole;
-}
-
-// Chat history related types
 export interface ChatSessionCreate {
     title: string;
 }
+
+// API Responses (ensure these match backend models/schemas.py)
+export interface Token {
+    access_token: string;
+    token_type: string;
+    role?: UserRole; // Include role if returned by backend /token endpoint
+}
+
+// Define LoginResponse based on what /api/token returns
+export interface LoginResponse extends Token {
+    // Add any other fields returned by your /api/token endpoint if necessary
+}
+
 
 export interface ChatSession {
     id: number;
     user_id: number;
     title: string;
-    created_at: string;
-    updated_at: string;
+    created_at: string; // Assuming ISO string format
+    updated_at: string; // Assuming ISO string format
 }
 
 export interface ChatMessageBase {
+    id?: number; // Optional for creation
+    session_id: number;
+    user_id: number;
     message_type: 'query' | 'response';
     content: string;
-    role: string; // This is the persona role for the query
-}
-
-export interface ChatMessage extends ChatMessageBase {
-    id: number;
-    user_id: number;
-    session_id: number;
+    role: string; // UserRole for query, 'assistant' for response
     created_at: string;
 }
 
 export interface ChatResponseBase {
+    id?: number; // Optional for creation
+    message_id: number;
     content: string;
     disclaimers?: string[];
-}
-
-export interface ChatResponseData extends ChatResponseBase {
-    id: number;
-    message_id: number;
     created_at: string;
 }
 
 export interface ChatHistoryItem {
-    message: ChatMessage;
-    response?: ChatResponseData;
+    message: ChatMessageBase;
+    response: ChatResponseBase | null;
+}
+
+export interface ChatSessionHistory {
+    session: ChatSession;
+    messages: ChatHistoryItem[];
 }
 
 export interface ChatSessionList {
     sessions: ChatSession[];
 }
 
-export interface ChatSessionHistory {
-    session: ChatSession;
-    messages: ChatHistoryItem[];
+// Simplified history item for public queries
+export interface SimpleHistoryItem {
+    role: 'user' | 'assistant';
+    content: string;
 }

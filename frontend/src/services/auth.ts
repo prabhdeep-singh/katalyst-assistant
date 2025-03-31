@@ -2,9 +2,7 @@ import axios from 'axios';
 import { api } from './api'; // Import the api service
 import { RegisterRequest, UserRole } from '../types'; // Import necessary types
 import { jwtDecode } from 'jwt-decode'; // Import jwt-decode
-
-// Use appropriate environment variable format for Create React App
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+// Removed unused API_URL constant, using apiClient/publicClient baseURL instead
 
 // Interface for the decoded JWT payload
 interface DecodedToken {
@@ -24,25 +22,25 @@ interface UserInfo {
 class AuthService {
     private tokenKey = 'katalyst_assistant_auth_token';
 
-    // Login user and store JWT token
-    async login(username: string, password: string): Promise<void> {
-        try {
-            const response = await axios.post(`${API_URL}/api/token`,
-                new URLSearchParams({
+    
+        // Login user and store JWT token
+        async login(username: string, password: string): Promise<void> {
+            try {
+                // Use the login method from the api service
+                const formData = new URLSearchParams({
                     username: username,
                     password: password,
-                }), {
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                });
+                const response = await api.login(formData); // Call the exported api.login
+    
+                // Access token directly from the response object now
+                if (response.access_token) {
+                    this.setToken(response.access_token);
+                    // No longer setting user info in localStorage here
+                } else {
+                    console.error("Login response missing token:", response); // Log the whole response
+                    throw new Error('Login failed: Invalid response from server.');
                 }
-            );
-
-            if (response.data.access_token) {
-                this.setToken(response.data.access_token);
-                // No longer setting user info in localStorage here
-            } else {
-                console.error("Login response missing token:", response.data);
-                throw new Error('Login failed: Invalid response from server.');
-            }
         } catch (error: any) {
              console.error("Login error:", error);
              const errorMsg = error.response?.data?.detail || error.message || 'Login failed';

@@ -24,7 +24,7 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
 *   [Docker](https://docs.docker.com/get-docker/)
 *   [Docker Compose](https://docs.docker.com/compose/install/) (Usually included with Docker Desktop)
 *   [Git](https://git-scm.com/downloads)
-*   A Google Gemini API Key (from [Google AI Studio](hhttps://aistudio.google.com/))
+*   A Google Gemini API Key (from [Google AI Studio](https://aistudio.google.com/))
 *   (Optional) Self-signed or valid SSL certificates for Nginx (`cert.pem`, `key.pem` in `nginx/ssl/`). A script `gen-certs.sh` is included for generating self-signed ones for local testing.
 
 ## Getting Started / Installation
@@ -32,7 +32,7 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
 1.  **Clone the Repository:**
     ```bash
     git clone <repository-url>
-    cd katalyst-assistant
+    cd katalyst-assistant # IMPORTANT: Rename the cloned folder if needed
     ```
     *(Replace `<repository-url>` with the actual URL after you create the GitHub repo. Ensure your local project folder is named `katalyst-assistant`)*
 
@@ -54,6 +54,7 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
         *   `LLM_MODEL`: (Optional) Change the Gemini model if desired (e.g., `gemini-1.5-flash`). Defaults to `gemini-pro`.
         *   `SECRET_KEY`: **Required.** Generate a strong secret key for JWT signing. You can use `openssl rand -hex 32` in your terminal to generate one and paste it here.
         *   `ACCESS_TOKEN_EXPIRE_MINUTES`: (Optional) Adjust token expiry time. Defaults to 30.
+        *   `BACKEND_CORS_ORIGINS`: For the local Docker setup, ensure this is set to `BACKEND_CORS_ORIGINS='["https://localhost"]'` to allow requests from the Nginx proxy.
 
 4.  **Configure Frontend Environment:**
     *   Copy the example environment file:
@@ -61,7 +62,7 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
         cp frontend/.env.example frontend/.env
         ```
     *   Edit `frontend/.env`:
-        *   `REACT_APP_API_URL`: This should point to the *base URL* where the frontend can reach the backend API *through Nginx*. Since Nginx proxies `/api` to the backend, and the frontend runs on `https://localhost`, this variable is **not directly used** by the current `api.ts` setup (which uses relative paths like `/api/query`). You can leave it as `http://localhost:8000` or remove it if not used elsewhere.
+        *   `REACT_APP_API_URL`: **Required.** Set this to the URL the frontend will use to reach the backend *via the Nginx proxy*. For the local Docker setup, this should be `https://localhost`. For a production deployment, this would be your public backend URL (e.g., `https://your-backend.run.app`).
 
 5.  **Build and Run with Docker Compose:**
     *   From the root `katalyst-assistant` directory, run:
@@ -99,15 +100,16 @@ Environment variables are used for configuration. Create `.env` files based on t
 *   `LLM_MODEL`: The Gemini model to use (default: `gemini-pro`).
 *   `SECRET_KEY`: A strong secret for signing JWT tokens.
 *   `ACCESS_TOKEN_EXPIRE_MINUTES`: JWT token validity duration (default: 30).
+*   `BACKEND_CORS_ORIGINS`: JSON array of allowed origins. Set to `BACKEND_CORS_ORIGINS='["https://localhost"]'` for local Docker/Nginx setup.
 
 **Frontend (`frontend/.env`):**
 
-*   `REACT_APP_API_URL`: (Currently not essential if using relative API paths) Base URL for the backend API if needed elsewhere (default: `http://localhost:8000`).
+*   `REACT_APP_API_URL`: The base URL the frontend uses to make API calls. Set to `https://localhost` for local Docker/Nginx setup.
 
 ## Nginx and Content Security Policy (CSP)
 
 *   Nginx is used as a reverse proxy, handling HTTPS termination and routing requests to the appropriate backend or frontend service.
-*   A Content Security Policy (CSP) is set in `nginx/nginx.conf`. The current policy includes `'unsafe-inline'` for `style-src` to support Chakra UI's dynamic styling and allows connections to `fonts.googleapis.com`, `fonts.gstatic.com`, and `http://localhost:8000` (for the backend API).
+*   A Content Security Policy (CSP) is set in `nginx/nginx.conf`. The current policy includes `'unsafe-inline'` for `style-src` to support Chakra UI's dynamic styling and allows connections to `fonts.googleapis.com`, `fonts.gstatic.com`, and the backend API origin (`https://localhost` for local setup).
 *   **Security Note:** For production deployments, consider replacing `'unsafe-inline'` with a stricter nonce-based strategy for enhanced security.
 
 ## Development Dependencies Audit

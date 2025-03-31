@@ -1,11 +1,11 @@
 import axios from 'axios';
 // Import SimpleHistoryItem along with others
-import { QueryRequest, FeedbackRequest, ChatSession, ChatSessionCreate, ChatSessionHistory, SimpleHistoryItem, RegisterRequest } from '../types'; // Added SimpleHistoryItem & RegisterRequest
+import { QueryRequest, FeedbackRequest, ChatSession, ChatSessionCreate, ChatSessionHistory, SimpleHistoryItem, RegisterRequest, LoginResponse } from '../types'; // Added SimpleHistoryItem, RegisterRequest, LoginResponse
 import { authService } from './auth';
 import { v4 as uuidv4 } from 'uuid';
 
 // Define API_URL safely using React's environment variable pattern
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_URL = process.env.REACT_APP_API_URL || 'https://localhost'; // Default to HTTPS localhost
 
 // Define the frontend ChatMessage interface (might differ slightly from backend)
 export interface ChatMessage {
@@ -28,7 +28,7 @@ export interface ChatConversation {
 
 
 const apiClient = axios.create({
-    baseURL: API_URL,
+    baseURL: API_URL, // Use the env variable for the base
 });
 
 // Add a request interceptor to attach the auth token
@@ -51,14 +51,18 @@ apiClient.interceptors.response.use(
     response => response,
     error => {
         if (error.response && error.response.status === 401) {
-            authService.logout();
-            window.location.href = '/'; // Redirect to login
+            // Avoid logout loop if the error is from the token refresh endpoint itself
+            if (!error.config.url?.includes('/api/token')) {
+                authService.logout();
+                // Use relative path for redirect to ensure it works regardless of deployment domain
+                window.location.href = '/';
+            }
         }
         return Promise.reject(error);
     }
 );
 
-// Create a public client without auth headers
+// Create a public client without auth headers for specific public endpoints
 const publicClient = axios.create({
     baseURL: API_URL, // Use the same base URL
 });
@@ -66,12 +70,18 @@ const publicClient = axios.create({
 // API service
 export const api = {
     // --- Authentication ---
+    login: async (formData: URLSearchParams): Promise<LoginResponse> => {
+        // Login uses the public client as no token exists yet
+        const { data } = await publicClient.post<LoginResponse>('/api/token', formData, {
+             headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        });
+        return data;
+    },
     register: async (params: RegisterRequest) => {
         // Registration is typically public
         const { data } = await publicClient.post('/api/register', params);
         return data;
     },
-    // login: async (...) => { ... } // Add login if needed
 
     // --- Queries ---
     submitQuery: async (params: QueryRequest) => {
@@ -112,22 +122,17 @@ export const api = {
     },
 
     // --- Messaging ---
-    sendMessage: async (chatId: string, message: string, role: string): Promise<ChatMessage> => {
-        const response = await apiClient.post('/api/query', {
+    // Note: sendMessage and sendOneOffMessage now primarily handle the API call structure,
+    // the actual transformation/state update happens in ChatInterface.tsx mutation callbacks.
+    sendMessage: async (chatId: string, message: string, role: string): Promise<any> => { // Return raw response data
+        const { data } = await apiClient.post('/api/query', {
             query: message,
             role: role,
             session_id: parseInt(chatId, 10)
         });
-        const assistantContent = response.data?.choices?.[0]?.message?.content || "Error: Could not parse response.";
-        return {
-            id: uuidv4(),
-            role: 'assistant',
-            content: assistantContent,
-            timestamp: new Date().toISOString(),
-            persona: role
-        };
+        return data; // Return the raw API response
     },
-    sendOneOffMessage: async (message: string, role: string, history?: SimpleHistoryItem[]): Promise<ChatMessage> => {
+    sendOneOffMessage: async (message: string, role: string, history?: SimpleHistoryItem[]): Promise<any> => { // Return raw response data
         console.log('Sending one-off message:', { message, role, history });
         try {
             const payload: QueryRequest = {
@@ -135,30 +140,16 @@ export const api = {
                 role: role.toLowerCase() || 'functional',
                 history: history
             };
-            const response = await publicClient.post('/api/public/query', payload);
-            console.log('Response from backend:', response.data);
-            const assistantContent = response.data?.choices?.[0]?.message?.content || "Error: Could not parse response.";
-            return {
-                id: uuidv4(),
-                role: 'assistant',
-                content: assistantContent,
-                timestamp: new Date().toISOString(),
-                persona: role
-            };
+            const { data } = await publicClient.post('/api/public/query', payload);
+            console.log('Response from backend:', data);
+            return data; // Return the raw API response
         } catch (error) {
             console.error('Error sending one-off message:', error);
-            return {
-                id: uuidv4(),
-                role: 'assistant',
-                content: "Sorry, I encountered an error processing your request. Please try again later.",
-                timestamp: new Date().toISOString(),
-                persona: role
-            };
+            // Re-throw the error so the mutation's onError can handle it
+            throw error;
         }
     },
-
-    // --- Deprecated/Combined ---
-    // deleteChat: async (chatId: string): Promise<void> => {
-    //     await api.deleteChatSession(parseInt(chatId, 10)); // Use the correct session endpoint
-    // }
 };
+
+// Export publicClient separately if needed elsewhere, though usually interacting via `api` object is preferred
+// export { publicClient };
