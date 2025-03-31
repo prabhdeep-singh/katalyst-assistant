@@ -1,0 +1,9 @@
+{
+  "short_name": "Katalyst Assistant",
+  "name": "Katalyst Assistant - AI ERP Helper",
+  "icons": [],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#722de6",
+  "background_color": "#ffffff"
+}

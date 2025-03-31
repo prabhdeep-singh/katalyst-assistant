@@ -1,0 +1,75 @@
+version: '3.9' # Note: Version is informational for compose v2+
+
+name: katalyst-assistant
+
+services:
+  db:
+    image: postgres:14-alpine
+    container_name: katalyst-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password # Use environment variable in production!
+      POSTGRES_DB: katalyst_assistant
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: katalyst-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    # Example of passing env vars directly (if not using env_file for some)
+    # environment:
+    #   - GEMINI_API_KEY=${GEMINI_API_KEY} # Pass from host env if needed
+    #   - LLM_MODEL=${LLM_MODEL:-gemini-pro}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: katalyst-frontend
+    restart: unless-stopped
+    # Removed ports section - Nginx handles external port mapping
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    container_name: katalyst-nginx
+    restart: unless-stopped
+    ports:
+      - "443:443" # Expose HTTPS port
+      - "80:80"   # Optionally expose HTTP and redirect in nginx.conf
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro # Mount SSL certs
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  postgres_data: # This name is local to the compose file
+    # Docker prepends project name: katalyst-assistant_postgres_data
