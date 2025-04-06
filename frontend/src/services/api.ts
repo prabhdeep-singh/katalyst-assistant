@@ -89,8 +89,10 @@ export const api = {
         return data;
     },
     submitPublicQuery: async (params: QueryRequest) => {
+        // This endpoint is now handled by sendOneOffMessage which returns ChatMessage
+        console.warn("submitPublicQuery is deprecated, use sendOneOffMessage");
         const { data } = await publicClient.post('/api/public/query', params);
-        return data;
+        return data; // Returns raw backend response structure
     },
 
     // --- Feedback ---
@@ -130,9 +132,17 @@ export const api = {
             role: role,
             session_id: parseInt(chatId, 10)
         });
-        return data; // Return the raw API response
+        // Transform backend response to ChatMessage format for mutation onSuccess
+        const assistantContent = data?.choices?.[0]?.message?.content || "Error: Could not parse response.";
+        return {
+            id: uuidv4(), // Generate frontend ID
+            role: 'assistant',
+            content: assistantContent,
+            timestamp: new Date().toISOString(),
+            persona: role
+        };
     },
-    sendOneOffMessage: async (message: string, role: string, history?: SimpleHistoryItem[]): Promise<any> => { // Return raw response data
+    sendOneOffMessage: async (message: string, role: string, history?: SimpleHistoryItem[]): Promise<ChatMessage> => { // Return ChatMessage
         console.log('Sending one-off message:', { message, role, history });
         try {
             const payload: QueryRequest = {
@@ -140,13 +150,28 @@ export const api = {
                 role: role.toLowerCase() || 'functional',
                 history: history
             };
-            const { data } = await publicClient.post('/api/public/query', payload);
-            console.log('Response from backend:', data);
-            return data; // Return the raw API response
+            const response = await publicClient.post('/api/public/query', payload);
+            console.log('Response from backend:', response.data);
+            // Parse the specific structure from /api/public/query
+            const assistantContent = response.data?.choices?.[0]?.message?.content || "Error: Could not parse response.";
+            // Return the expected ChatMessage structure
+            return {
+                id: uuidv4(), // Generate frontend ID
+                role: 'assistant',
+                content: assistantContent,
+                timestamp: new Date().toISOString(),
+                persona: role
+            };
         } catch (error) {
             console.error('Error sending one-off message:', error);
-            // Re-throw the error so the mutation's onError can handle it
-            throw error;
+            // Return an error message in the expected ChatMessage structure
+            return {
+                id: uuidv4(),
+                role: 'assistant',
+                content: "Sorry, I encountered an error processing your request. Please try again later.",
+                timestamp: new Date().toISOString(),
+                persona: role
+            };
         }
     },
 };

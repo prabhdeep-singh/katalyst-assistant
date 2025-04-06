@@ -51,7 +51,7 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
     *   Edit `backend/.env` with your actual values:
         *   `DATABASE_URL`: Keep the default `postgresql://postgres:password@db:5432/katalyst_assistant` if using the included Docker Compose setup. Change the password if desired (and update in `docker-compose.yml` too).
         *   `GEMINI_API_KEY`: **Required.** Paste your Gemini API key here.
-        *   `LLM_MODEL`: (Optional) Change the Gemini model if desired (e.g., `gemini-1.5-flash`). Defaults to `gemini-pro`.
+        *   `LLM_MODEL`: (Optional) Change the Gemini model if desired (e.g., `gemini-1.5-flash`). Defaults to `gemini-2.0-flash-lite`.
         *   `SECRET_KEY`: **Required.** Generate a strong secret key for JWT signing. You can use `openssl rand -hex 32` in your terminal to generate one and paste it here.
         *   `ACCESS_TOKEN_EXPIRE_MINUTES`: (Optional) Adjust token expiry time. Defaults to 30.
         *   `BACKEND_CORS_ORIGINS`: For the local Docker setup, ensure this is set to `BACKEND_CORS_ORIGINS='["https://localhost"]'` to allow requests from the Nginx proxy.
@@ -97,7 +97,7 @@ Environment variables are used for configuration. Create `.env` files based on t
 
 *   `DATABASE_URL`: PostgreSQL connection string (e.g., `postgresql://postgres:password@db:5432/katalyst_assistant`).
 *   `GEMINI_API_KEY`: Your Google Gemini API key.
-*   `LLM_MODEL`: The Gemini model to use (default: `gemini-pro`).
+*   `LLM_MODEL`: The Gemini model to use (default: `gemini-2.0-flash-lite`).
 *   `SECRET_KEY`: A strong secret for signing JWT tokens.
 *   `ACCESS_TOKEN_EXPIRE_MINUTES`: JWT token validity duration (default: 30).
 *   `BACKEND_CORS_ORIGINS`: JSON array of allowed origins. Set to `BACKEND_CORS_ORIGINS='["https://localhost"]'` for local Docker/Nginx setup.
