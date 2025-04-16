@@ -1,8 +1,9 @@
 import axios from 'axios';
 // Import SimpleHistoryItem along with others
-import { QueryRequest, FeedbackRequest, ChatSession, ChatSessionCreate, ChatSessionHistory, SimpleHistoryItem, RegisterRequest, LoginResponse } from '../types'; // Added SimpleHistoryItem, RegisterRequest, LoginResponse
-import { authService } from './auth';
+import { QueryRequest, FeedbackRequest, ChatSession, ChatSessionCreate, ChatSessionHistory, SimpleHistoryItem, RegisterRequest, LoginResponse, UserRead } from '../types'; // Added UserRead
+// Removed authService import as it's no longer needed here for token
 import { v4 as uuidv4 } from 'uuid';
+import Cookies from 'js-cookie'; // Import js-cookie to read CSRF token
 
 // Define API_URL safely using React's environment variable pattern
 const API_URL = process.env.REACT_APP_API_URL || 'https://localhost'; // Default to HTTPS localhost
@@ -26,24 +27,49 @@ export interface ChatConversation {
     updated_at?: string; // Add if available/needed
 }
 
+// Define AppConfig interface
+export interface AppConfig {
+    guest_mode_enabled: boolean;
+}
+
 
 const apiClient = axios.create({
     baseURL: API_URL, // Use the env variable for the base
 });
 
-// Add a request interceptor to attach the auth token
+// REMOVED: Old interceptor for Authorization: Bearer header
+// apiClient.interceptors.request.use(
+//     config => {
+//         const token = authService.getToken(); // This caused the error as getToken was removed
+//         if (token) {
+//             config.headers = config.headers || {};
+//             config.headers.Authorization = `Bearer ${token}`;
+//         }
+//         return config;
+//     },
+//     error => {
+//         return Promise.reject(error);
+//     }
+// );
+
+// Add a request interceptor to include the CSRF token header for relevant methods
 apiClient.interceptors.request.use(
     config => {
-        const token = authService.getToken();
-        if (token) {
-            config.headers = config.headers || {};
-            config.headers.Authorization = `Bearer ${token}`;
+        const method = config.method?.toLowerCase();
+        // Add CSRF token for state-changing methods
+        if (method === 'post' || method === 'put' || method === 'delete' || method === 'patch') {
+            const csrfToken = Cookies.get('csrf_token_cookie'); // Updated to match backend cookie name
+            if (csrfToken) {
+                config.headers = config.headers || {};
+                config.headers['X-CSRF-Token'] = csrfToken;
+            } else {
+                console.warn('CSRF token cookie (csrf_token_cookie) not found for state-changing request.');
+                // Don't prevent the request, let the backend handle CSRF validation
+            }
         }
         return config;
     },
-    error => {
-        return Promise.reject(error);
-    }
+    error => Promise.reject(error)
 );
 
 // Add a response interceptor to handle token expiration
@@ -53,7 +79,8 @@ apiClient.interceptors.response.use(
         if (error.response && error.response.status === 401) {
             // Avoid logout loop if the error is from the token refresh endpoint itself
             if (!error.config.url?.includes('/api/token')) {
-                authService.logout();
+                // Cannot call authService.logout() directly here as it might cause loops
+                // Just redirect, authService.isAuthenticated() check on reload will handle state
                 // Use relative path for redirect to ensure it works regardless of deployment domain
                 window.location.href = '/';
             }
@@ -69,6 +96,13 @@ const publicClient = axios.create({
 
 // API service
 export const api = {
+    // --- Application Configuration ---
+    getAppConfig: async (): Promise<AppConfig> => {
+        // Config should be fetched using public client as it's needed before login
+        const { data } = await publicClient.get<AppConfig>('/api/config');
+        return data;
+    },
+
     // --- Authentication ---
     login: async (formData: URLSearchParams): Promise<LoginResponse> => {
         // Login uses the public client as no token exists yet
@@ -80,6 +114,16 @@ export const api = {
     register: async (params: RegisterRequest) => {
         // Registration is typically public
         const { data } = await publicClient.post('/api/register', params);
+        return data;
+    },
+    logout: async (): Promise<{ message: string }> => {
+        // Logout uses the authenticated client to ensure cookies are sent
+        const { data } = await apiClient.post<{ message: string }>('/api/logout');
+        return data;
+    },
+    getCurrentUserInfo: async (): Promise<UserRead> => {
+        // Get user info from the protected endpoint
+        const { data } = await apiClient.get<UserRead>('/api/users/me');
         return data;
     },
 

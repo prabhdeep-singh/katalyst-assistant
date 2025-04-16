@@ -1,14 +1,15 @@
-from fastapi import FastAPI, HTTPException, Depends, Request, status
+import os
+import secrets
+from fastapi import FastAPI, HTTPException, Depends, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import timedelta
-import os
-import json # Needed for parsing CORS origins
+import json
 from dotenv import load_dotenv
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 import logging
-import traceback # For detailed error logging
+import traceback
 
 # Rate Limiting Imports
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -18,9 +19,9 @@ from slowapi.errors import RateLimitExceeded
 # Model and Service Imports
 from .models.enums import UserRole
 from .models.schemas import (
-    QueryRequest, FeedbackRequest, LLMConfig, SecurityConfig, Token, UserCreate,
+    QueryRequest, FeedbackRequest, LLMConfig, SecurityConfig, Token, UserCreate, UserRead,
     ChatSessionCreate, ChatMessageCreate, ChatResponseCreate, ChatSession,
-    ChatHistoryItem, ChatSessionList, ChatSessionHistory
+    ChatHistoryItem, ChatSessionList, ChatSessionHistory, ChatMessageUpdate
 )
 from .models.database import get_db, create_tables
 from .services.llm_service import EnhancedLLMWrapper
@@ -49,51 +50,102 @@ if not os.getenv("SECRET_KEY"):
 create_tables()
 
 # --- Rate Limiting Setup ---
-limiter = Limiter(key_func=get_remote_address)
-app = FastAPI()
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# Check if rate limiting is enabled (default to True)
+rate_limit_enabled = os.getenv("RATE_LIMIT_ENABLED", "true").lower() in ["true", "1", "yes"]
+guest_mode_enabled = os.getenv("GUEST_MODE_ENABLED", "true").lower() in ["true", "1", "yes"]
+
+if rate_limit_enabled:
+    limiter = Limiter(
+        key_func=get_remote_address,
+        default_limits=[os.getenv("RATE_LIMIT_DEFAULT", "60/minute")]  # Use environment variable or default to 60/minute
+    )
+    app = FastAPI()
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    logger.info("Rate limiting is enabled with default limit: " + os.getenv("RATE_LIMIT_DEFAULT", "60/minute"))
+else:
+    # Create a dummy limiter that doesn't actually limit
+    class DummyLimiter:
+        def limit(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+    
+    limiter = DummyLimiter()
+    app = FastAPI()
+    logger.info("Rate limiting is disabled")
 
 # --- Middleware Setup ---
 
 # Configure CORS
-# Read allowed origins from environment variable
-# Expected format: JSON string array, e.g., '["https://localhost", "https://your-domain.com"]'
+# Get CORS origins from environment variable
 cors_origins_str = os.getenv("BACKEND_CORS_ORIGINS", '[]') # Default to empty list string
-allowed_origins = ["*"] # Default to allow all if parsing fails or env var is empty/missing
+cors_origins = ["*"] # Default to allow all origins
+
+# Get cookie domain from environment variable
+cookie_domain = os.getenv("COOKIE_DOMAIN", None)  # Default to None (current domain)
+
 try:
-    parsed_origins = json.loads(cors_origins_str)
-    if isinstance(parsed_origins, list) and len(parsed_origins) > 0:
-        allowed_origins = parsed_origins
-    elif cors_origins_str and cors_origins_str != '[]': # Handle non-empty, non-list strings if needed
-         # Simple comma-separated list fallback (optional)
-         # allowed_origins = [origin.strip() for origin in cors_origins_str.split(',')]
-         logger.warning(f"BACKEND_CORS_ORIGINS is not a valid JSON list, using default '*'. Value: {cors_origins_str}")
-         allowed_origins = ["*"] # Fallback to allow all if format is wrong but var exists
+    if cors_origins_str and cors_origins_str != "[]":
+        cors_origins = json.loads(cors_origins_str)
+        if not isinstance(cors_origins, list):
+            logger.warning(f"BACKEND_CORS_ORIGINS is not a valid JSON list, using default '*'. Value: {cors_origins_str}")
+            cors_origins = ["*"]
     else:
-         # If empty list '[]' or not set, default to allowing all for easier local dev
-         logger.info("BACKEND_CORS_ORIGINS not set or empty, allowing all origins ('*').")
-         allowed_origins = ["*"]
-
-except json.JSONDecodeError:
+        logger.info("BACKEND_CORS_ORIGINS not set or empty, allowing all origins ('*').")
+except json.JSONDecodeError as e:
     logger.error(f"Failed to parse BACKEND_CORS_ORIGINS JSON string: {cors_origins_str}. Allowing all origins ('*').")
-    allowed_origins = ["*"]
+    cors_origins = ["*"]
 
-
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins, # Use the parsed or default list
+    allow_origins=cors_origins, # Use the parsed or default list
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Log CORS settings
-logger.info(f"CORS configured with allow_origins: {allowed_origins}")
+# Add security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    # Add security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
+# Log CORS settings
+logger.info(f"CORS configured with allow_origins: {cors_origins}")
 
 # Initialize services
 prompt_engine = PromptEngine()
+
+# --- Define CSRF Verification Dependency ---
+async def verify_csrf(request: Request):
+    # Get token from non-HttpOnly cookie
+    csrf_cookie = request.cookies.get("csrf_token_cookie")
+    # Get token from request header (sent by frontend JS)
+    csrf_header = request.headers.get("X-CSRF-Token")
+
+    if not csrf_cookie or not csrf_header:
+        logger.warning("CSRF cookie or header missing.")
+        raise HTTPException(status_code=403, detail="CSRF token missing")
+
+    try:
+        is_valid = secrets.compare_digest(csrf_cookie, csrf_header)
+    except Exception: # Handle potential errors during comparison
+        logger.warning("Error comparing CSRF tokens.")
+        is_valid = False
+
+    if not is_valid:
+        logger.warning("CSRF token mismatch.")
+        raise HTTPException(status_code=403, detail="CSRF token mismatch")
+    # If tokens match, request proceeds implicitly
+    logger.debug("CSRF token verified successfully.")
+# --- End CSRF Dependency ---
 
 # --- API Endpoints ---
 
@@ -102,10 +154,32 @@ async def health_check():
     """Health check endpoint."""
     return {"status": "healthy"}
 
-@app.post("/api/token", response_model=Token)
-@limiter.limit("10/minute") # Apply rate limit
-async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
-    """Generate JWT token for user authentication."""
+
+@app.get("/api/config")
+async def get_app_config():
+    """Returns application configuration settings."""
+    logger.info(f"Sending app config: guest_mode_enabled={guest_mode_enabled}")
+    return {"guest_mode_enabled": guest_mode_enabled}
+
+# Get rate limits from environment variables or use defaults
+rate_limit_login = os.getenv("RATE_LIMIT_LOGIN", "5/minute")
+rate_limit_register = os.getenv("RATE_LIMIT_REGISTER", "2/hour")
+rate_limit_logout = os.getenv("RATE_LIMIT_LOGOUT", "5/minute")
+rate_limit_query = os.getenv("RATE_LIMIT_QUERY", "30/minute")
+rate_limit_public_query = os.getenv("RATE_LIMIT_PUBLIC_QUERY", "15/minute")
+rate_limit_create_session = os.getenv("RATE_LIMIT_CREATE_SESSION", "30/minute")
+rate_limit_update_session = os.getenv("RATE_LIMIT_UPDATE_SESSION", "20/minute")
+rate_limit_delete_session = os.getenv("RATE_LIMIT_DELETE_SESSION", "20/minute")
+rate_limit_update_message = os.getenv("RATE_LIMIT_UPDATE_MESSAGE", "20/minute")
+
+@app.post("/api/token")
+@limiter.limit(rate_limit_login)
+async def login_for_access_token(
+    request: Request,
+    response: Response,
+    form_data: OAuth2PasswordRequestForm = Depends()
+):
+    """Authenticate user, set HttpOnly auth cookie and CSRF cookie + token."""
     logger.info(f"Login attempt for user: {form_data.username}")
     user = authenticate_user(form_data.username, form_data.password)
     if not user:
@@ -121,11 +195,44 @@ async def login_for_access_token(request: Request, form_data: OAuth2PasswordRequ
         data={"sub": user["username"], "role": user.get("role", "unknown")},
         expires_delta=access_token_expires
     )
-    logger.info(f"Login successful, token generated for user: {form_data.username}")
-    return {"access_token": access_token, "token_type": "bearer", "role": user.get("role")}
+
+    # --- Manual CSRF Double Submit Cookie ---
+    csrf_token = secrets.token_urlsafe(32) # Generate secure token
+
+    # Set HttpOnly cookie for the access token
+    response.set_cookie(
+        key="access_token_cookie",
+        value=access_token,
+        httponly=True,
+        secure=True,
+        samesite="strict",  # Changed from "lax" to "strict"
+        domain=cookie_domain,  # Add domain if set
+        max_age=int(access_token_expires.total_seconds())
+    )
+
+    # Set non-HttpOnly cookie for the CSRF token
+    response.set_cookie(
+        key="csrf_token_cookie",
+        value=csrf_token,
+        httponly=False,  # MUST be False for JS access
+        secure=True,
+        samesite="strict",  # Changed from "lax" to "strict"
+        domain=cookie_domain,  # Add domain if set
+        max_age=int(access_token_expires.total_seconds())  # Match access token expiry
+    )
+    # --- End CSRF ---
+
+    logger.info(f"Login successful for user: {form_data.username}")
+
+    # Return user info AND the CSRF token value
+    return {
+        "message": "Login successful",
+        "user": {"username": user["username"], "role": user.get("role")},
+        # "csrf_token": csrf_token # REMOVED: Frontend reads the cookie directly now
+    }
 
 @app.post("/api/register")
-@limiter.limit("5/hour") # Stricter limit for registration
+@limiter.limit(rate_limit_register)
 async def register_user(request: Request, user_data: UserCreate):
     """Register a new user."""
     logger.info(f"Registration attempt for user: {user_data.username}")
@@ -139,13 +246,43 @@ async def register_user(request: Request, user_data: UserCreate):
     logger.info(f"Registration successful for user: {user_data.username}")
     return {"message": "User created successfully"}
 
+@app.post("/api/logout")
+@limiter.limit(rate_limit_logout)
+async def logout_user(request: Request, response: Response):
+    """Logout user by clearing cookies."""
+    logger.info("Logout attempt: Clearing cookies.")
+    response.delete_cookie(
+        key="access_token_cookie",
+        httponly=True,
+        secure=True,
+        samesite="strict",  # Changed from "lax" to "strict"
+        domain=cookie_domain  # Add domain if set
+    )
+    response.delete_cookie(
+        key="csrf_token_cookie",
+        httponly=False,
+        secure=True,
+        samesite="strict",  # Changed from "lax" to "strict"
+        domain=cookie_domain  # Add domain if set
+    )
+    logger.info("Cookies cleared for logout.")
+    return {"message": "Successfully logged out"}
+
+@app.get("/api/users/me", response_model=UserRead)
+async def read_users_me(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """Fetch details for the currently authenticated user."""
+    # The get_current_user dependency already returns a dict with id, username, role
+    # FastAPI will automatically filter this based on the UserRead response_model
+    return current_user
+
 @app.post("/api/query", response_model=Dict[str, Any])
-@limiter.limit("60/minute") # Rate limit for authenticated queries
+@limiter.limit(rate_limit_query)
 async def process_query(
-    request: Request, # Add request for rate limiter
-    query_request: QueryRequest, # Rename variable to avoid conflict
+    request: Request,
+    query_request: QueryRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    csrf_check: None = Depends(verify_csrf)
 ):
     """Process queries from authenticated users, include history, and save"""
     session_id_for_saving: Optional[int] = query_request.session_id
@@ -241,9 +378,19 @@ async def process_query(
 
 
 @app.post("/api/public/query")
-@limiter.limit("30/minute") # Rate limit for public queries
-async def process_public_query(request: Request, query_request: QueryRequest): # Add request, rename body param
+@limiter.limit(rate_limit_public_query)
+async def process_public_query(
+    request: Request,
+    query_request: QueryRequest,
+    # No CSRF needed for public endpoint
+):
     """Process queries from public/unauthenticated users, include history"""
+    # --- Add Guest Mode Check ---
+    if not guest_mode_enabled:
+        logger.warning("Public query attempt failed: Guest mode is disabled.")
+        raise HTTPException(status_code=403, detail="Guest access is disabled.")
+    # --- End Guest Mode Check ---
+
     logger.info(f"Processing public query. Role: {query_request.role}, History provided: {bool(query_request.history)}")
     try:
         model_name = os.getenv("LLM_MODEL", "gemini-2.0-flash-lite")
@@ -295,11 +442,12 @@ async def process_public_query(request: Request, query_request: QueryRequest): #
 
 
 @app.post("/api/feedback")
-@limiter.limit("10/minute") # Limit feedback submissions
+@limiter.limit("10/minute")
 async def submit_feedback(
-    request: Request, # Add request for rate limiter
+    request: Request,
     feedback: FeedbackRequest,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    csrf_check: None = Depends(verify_csrf)
 ):
     logger.info(f"Feedback received from user {current_user.get('username')}: {feedback}")
     # Implement feedback storage logic here
@@ -322,12 +470,13 @@ async def get_chat_sessions(
     return {"sessions": sessions}
 
 @app.post("/api/chat/sessions", response_model=ChatSession)
-@limiter.limit("20/minute")
+@limiter.limit(rate_limit_create_session)
 async def create_chat_session(
-    request: Request, # Add request
+    request: Request,
     session_data: ChatSessionCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    csrf_check: None = Depends(verify_csrf)
 ):
     """Create a new chat session"""
     user_id = get_user_id_from_username(current_user["username"])
@@ -356,13 +505,14 @@ async def get_chat_session_history(
     return {"session": session, "messages": messages}
 
 @app.put("/api/chat/sessions/{session_id}", response_model=ChatSession)
-@limiter.limit("30/minute")
+@limiter.limit(rate_limit_update_session)
 async def update_chat_session(
-    request: Request, # Add request
+    request: Request,
     session_id: int,
     session_data: ChatSessionCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    csrf_check: None = Depends(verify_csrf)
 ):
     """Update a chat session's title"""
     user_id = get_user_id_from_username(current_user["username"])
@@ -375,12 +525,13 @@ async def update_chat_session(
     return session
 
 @app.delete("/api/chat/sessions/{session_id}")
-@limiter.limit("30/minute")
+@limiter.limit(rate_limit_delete_session)
 async def delete_chat_session(
-    request: Request, # Add request
+    request: Request,
     session_id: int,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    csrf_check: None = Depends(verify_csrf)
 ):
     """Delete a chat session and all its messages"""
     user_id = get_user_id_from_username(current_user["username"])
@@ -391,3 +542,39 @@ async def delete_chat_session(
         raise HTTPException(status_code=404, detail="Session not found")
     logger.info(f"Deleted session {session_id} for user {user_id}")
     return {"status": "success", "message": "Session deleted"}
+
+@app.put("/api/chat/sessions/{session_id}/messages/{message_id}")
+@limiter.limit(rate_limit_update_message)
+async def update_chat_message(
+    request: Request,
+    session_id: str,
+    message_id: str,
+    message_data: ChatMessageUpdate,
+    csrf_check: None = Depends(verify_csrf),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    user_id = get_user_id_from_username(current_user["username"])
+    if not user_id:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Verify session ownership
+    session = await ChatHistoryService.get_session(db, session_id, user_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    
+    # Get and verify message ownership
+    message = await ChatHistoryService.get_message(db, message_id, session_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="Message not found")
+    
+    # Update message
+    message.content = message_data.content
+    message.metadata = message_data.metadata
+    
+    # Save changes
+    await db.commit()
+    await db.refresh(message)
+    
+    logger.info(f"Updated message {message_id} in session {session_id} for user {user_id}")
+    return message

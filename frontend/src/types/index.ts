@@ -44,8 +44,22 @@ export interface Token {
 }
 
 // Define LoginResponse based on what /api/token returns
-export interface LoginResponse extends Token {
-    // Add any other fields returned by your /api/token endpoint if necessary
+// Updated: No longer returns token directly
+export interface LoginResponse {
+    message: string; // e.g., "Login successful"
+    user?: { // Optional user info
+        username: string;
+        role: UserRole | string; // Role might be enum or string
+    };
+    csrf_token?: string; // CSRF token returned by the backend
+}
+
+// User info returned by /api/users/me
+export interface UserRead {
+    id: number;
+    username: string;
+    role: UserRole; // Use the enum
+    created_at: string; // Assuming ISO string format
 }
 
 

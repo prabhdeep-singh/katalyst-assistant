@@ -1,7 +1,8 @@
 import axios from 'axios';
 import { api } from './api'; // Import the api service
-import { RegisterRequest, UserRole } from '../types'; // Import necessary types
-import { jwtDecode } from 'jwt-decode'; // Import jwt-decode
+import { RegisterRequest, UserRole, UserRead } from '../types'; // Import necessary types, including UserRead
+import { jwtDecode } from 'jwt-decode'; // Import jwt-decode - Keep for potential future use if needed, but not for auth token
+import Cookies from 'js-cookie'; // Import js-cookie for reading CSRF token
 // Removed unused API_URL constant, using apiClient/publicClient baseURL instead
 
 // Interface for the decoded JWT payload
@@ -20,7 +21,8 @@ interface UserInfo {
 
 
 class AuthService {
-    private tokenKey = 'katalyst_assistant_auth_token';
+    // private tokenKey = 'katalyst_assistant_auth_token'; // No longer storing token in localStorage
+    private csrfCookieName = 'csrf_token_cookie'; // Updated to match backend cookie name
 
     
         // Login user and store JWT token
@@ -33,12 +35,14 @@ class AuthService {
                 });
                 const response = await api.login(formData); // Call the exported api.login
     
-                // Access token directly from the response object now
-                if (response.access_token) {
-                    this.setToken(response.access_token);
-                    // No longer setting user info in localStorage here
+                // Backend now sets HttpOnly cookie for auth and non-HttpOnly for CSRF.
+                // We just check for success.
+                if (response && response.message === "Login successful") {
+                    console.log("Login successful, cookies set by backend.");
+                    // REMOVED: No longer need to manually set the CSRF cookie here
+                    // if (response.csrf_token) { ... }
                 } else {
-                    console.error("Login response missing token:", response); // Log the whole response
+                    console.error("Login response indicates failure:", response);
                     throw new Error('Login failed: Invalid response from server.');
                 }
         } catch (error: any) {
@@ -68,75 +72,63 @@ class AuthService {
 
     // Logout user by removing token
     logout(): void {
-        localStorage.removeItem(this.tokenKey);
-        // Removed localStorage.removeItem(this.userKey);
+        // Call the backend logout endpoint to clear cookies
+        api.logout().then(() => {
+            console.log("Logout successful, cookies cleared by backend.");
+        }).catch((error: any) => { // Add explicit type 'any' to error parameter
+            console.error("Logout API call failed:", error);
+            // Optionally force remove frontend cookies if API fails?
+            // Cookies.remove(this.csrfCookieName); // Example if needed
+        });
     }
 
     // Check if user is authenticated (token exists and is not expired)
     isAuthenticated(): boolean {
-        const token = this.getToken();
-        if (!token) {
-            return false;
-        }
-        try {
-            const decoded = jwtDecode<DecodedToken>(token);
-            // Check if token is expired
-            const isExpired = Date.now() >= decoded.exp * 1000;
-            if (isExpired) {
-                this.logout(); // Clean up expired token
-                return false;
-            }
-            return true;
-        } catch (error) {
-            console.error("Error decoding token:", error);
-            this.logout(); // Clean up invalid token
-            return false;
-        }
+        // Check if the CSRF token cookie exists as an indicator of an active session
+        // Note: This isn't foolproof, as the auth cookie could expire before the CSRF one.
+        // A better check might involve making a quick API call to a protected endpoint.
+        const csrfToken = Cookies.get(this.csrfCookieName); // Reads 'csrf_token_cookie'
+        return !!csrfToken; // Returns true if the cookie exists, false otherwise
     }
 
     // Get user info by decoding the token
-    getCurrentUser(): UserInfo | null {
-        const token = this.getToken();
-        if (!token) return null;
-
+    // Updated: Now fetches user info from the backend API asynchronously
+    async getCurrentUser(): Promise<UserRead | null> {
+        // Check authentication status first (e.g., cookie presence)
+        if (!this.isAuthenticated()) {
+            return null;
+        }
         try {
-            const decoded = jwtDecode<DecodedToken>(token);
-            // Validate role from token against UserRole enum
-            const roleKey = decoded.role?.toUpperCase() as keyof typeof UserRole;
-            const validRole = UserRole[roleKey] ? UserRole[roleKey] : null;
-
-            return {
-                username: decoded.sub,
-                role: validRole
-            };
-        } catch (e) {
-            console.error('Error decoding token for user info', e);
-            // Optionally logout if token is invalid
-            // this.logout();
+            const userInfo = await api.getCurrentUserInfo();
+            return userInfo;
+        } catch (error) {
+            console.error("Failed to fetch current user info:", error);
+            // Handle error appropriately, maybe logout if it's an auth error (e.g., 401)
+            // Depending on error handling in api.ts interceptor, a 401 might already trigger logout/redirect
             return null;
         }
     }
 
     // Get the authentication token
-    getToken(): string | null {
-        return localStorage.getItem(this.tokenKey);
-    }
+    // getToken(): string | null { // Obsolete - cannot access HttpOnly cookie
+    //     return localStorage.getItem(this.tokenKey);
+    // }
 
     // Set the authentication token
-    private setToken(token: string): void {
-        localStorage.setItem(this.tokenKey, token);
-    }
+    // private setToken(token: string): void { // Obsolete
+    //     localStorage.setItem(this.tokenKey, token);
+    // }
 
     // Removed private setUser method
 
     // Get auth header for API requests (used by apiClient interceptor)
-    getAuthHeader(): { Authorization: string } | {} {
-        const token = this.getToken();
-        if (token) {
-            return { Authorization: `Bearer ${token}` };
-        }
-        return {};
-    }
+    // getAuthHeader(): { Authorization: string } | {} { // Obsolete
+    //     const token = this.getToken();
+    //     if (token) {
+    //         return { Authorization: `Bearer ${token}` };
+    //     }
+    //     return {};
+    // }
 }
 
 export const authService = new AuthService();

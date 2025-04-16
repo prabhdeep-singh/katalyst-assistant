@@ -28,12 +28,14 @@ interface RegisterProps {
     onRegisterSuccess: () => void;
     onNavigateToLogin: () => void;
     onContinueAsGuest?: () => void;
+    isGuestModeAllowed: boolean; // Add the new prop
 }
 
 export const Register: React.FC<RegisterProps> = ({
     onRegisterSuccess,
     onNavigateToLogin,
-    onContinueAsGuest
+    onContinueAsGuest,
+    isGuestModeAllowed // Destructure the new prop
 }) => {
     const [showPassword, setShowPassword] = useState(false);
     const [formData, setFormData] = useState({
@@ -249,7 +251,7 @@ export const Register: React.FC<RegisterProps> = ({
                             </Link>
                         </Text>
 
-                        {onContinueAsGuest && (
+                        {isGuestModeAllowed && onContinueAsGuest && ( // Check the prop here
                             <>
                                 <Box textAlign="center" py={2}>
                                     <Text fontSize="sm" color="gray.500">or</Text>

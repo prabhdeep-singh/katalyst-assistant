@@ -93,6 +93,13 @@ class UserCreate(BaseModel):
         }
     }
 
+# Schema for returning user information (excluding password)
+class UserRead(BaseModel):
+    id: int
+    username: str
+    role: UserRole # Use the enum for consistency
+    created_at: datetime
+
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -172,6 +179,10 @@ class ChatHistoryItem(BaseModel):
     model_config = {
         "from_attributes": True
     }
+
+class ChatMessageUpdate(BaseModel):
+    content: str
+    metadata: Optional[Dict[str, Any]] = None
 
 class ChatSessionList(BaseModel):
     sessions: List[ChatSession]

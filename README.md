@@ -7,10 +7,12 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
 *   **Persona-Based Responses:** Select a user role (Technical Expert, Functional Consultant, Administrator, etc.) to receive answers tailored to that perspective.
 *   **Markdown Support:** Assistant responses are formatted using Markdown, including code blocks, lists, tables, and text emphasis.
 *   **Chat History:** Authenticated users have their chat sessions saved and can revisit previous conversations.
-*   **Authentication:** JWT-based authentication for registered users.
+*   **Authentication:** JWT-based authentication with secure cookie-based token storage.
+*   **CSRF Protection:** Double-submit cookie pattern for state-changing operations.
 *   **Guest Mode:** Allows unauthenticated users to try the assistant (without history saving).
 *   **Dockerized:** Easy setup and deployment using Docker and Docker Compose.
 *   **Configurable LLM:** Uses Google Gemini by default, configurable via environment variables.
+*   **Rate Limiting:** Configurable rate limits for all endpoints to prevent abuse.
 
 ## Tech Stack
 
@@ -18,6 +20,7 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
 *   **Frontend:** React, TypeScript, Chakra UI, React Query, Axios, `react-markdown`, `remark-gfm`, `jwt-decode`, `serve` (for serving static build)
 *   **LLM:** Google Gemini API (configurable)
 *   **Deployment:** Docker, Docker Compose, Nginx (for HTTPS termination and proxying)
+*   **Security:** JWT, CSRF Protection, Rate Limiting, Security Headers
 
 ## Prerequisites
 
@@ -55,6 +58,18 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
         *   `SECRET_KEY`: **Required.** Generate a strong secret key for JWT signing. You can use `openssl rand -hex 32` in your terminal to generate one and paste it here.
         *   `ACCESS_TOKEN_EXPIRE_MINUTES`: (Optional) Adjust token expiry time. Defaults to 30.
         *   `BACKEND_CORS_ORIGINS`: For the local Docker setup, ensure this is set to `BACKEND_CORS_ORIGINS='["https://localhost"]'` to allow requests from the Nginx proxy.
+        *   `COOKIE_DOMAIN`: (Optional) Set the domain for cookies. For local development, use `localhost`. For production, use your domain (e.g., `.your-domain.com`).
+        *   `RATE_LIMIT_ENABLED`: Enable/disable rate limiting (default: `true`).
+        *   `RATE_LIMIT_DEFAULT`: Default rate limit for endpoints (default: `60/minute`).
+        *   Rate limit per endpoint (all optional with defaults):
+            *   `RATE_LIMIT_LOGIN`: Login endpoint (default: `5/minute`)
+            *   `RATE_LIMIT_REGISTER`: Registration endpoint (default: `2/hour`)
+            *   `RATE_LIMIT_LOGOUT`: Logout endpoint (default: `5/minute`)
+            *   `RATE_LIMIT_QUERY`: Query endpoint (default: `30/minute`)
+            *   `RATE_LIMIT_PUBLIC_QUERY`: Public query endpoint (default: `15/minute`)
+            *   `RATE_LIMIT_CREATE_SESSION`: Chat session creation (default: `30/minute`)
+            *   `RATE_LIMIT_UPDATE_SESSION`: Chat session updates (default: `20/minute`)
+            *   `RATE_LIMIT_DELETE_SESSION`: Chat session deletion (default: `20/minute`)
 
 4.  **Configure Frontend Environment:**
     *   Copy the example environment file:
@@ -101,10 +116,61 @@ Environment variables are used for configuration. Create `.env` files based on t
 *   `SECRET_KEY`: A strong secret for signing JWT tokens.
 *   `ACCESS_TOKEN_EXPIRE_MINUTES`: JWT token validity duration (default: 30).
 *   `BACKEND_CORS_ORIGINS`: JSON array of allowed origins. Set to `BACKEND_CORS_ORIGINS='["https://localhost"]'` for local Docker/Nginx setup.
+*   `COOKIE_DOMAIN`: Domain for cookies. For local development, use `localhost`. For production, use your domain (e.g., `.your-domain.com`).
+*   `RATE_LIMIT_ENABLED`: Enable/disable rate limiting (default: `true`).
+*   `RATE_LIMIT_DEFAULT`: Default rate limit for endpoints (default: `60/minute`).
+*   Rate limit per endpoint (all optional with defaults):
+    *   `RATE_LIMIT_LOGIN`: Login endpoint (default: `5/minute`)
+    *   `RATE_LIMIT_REGISTER`: Registration endpoint (default: `2/hour`)
+    *   `RATE_LIMIT_LOGOUT`: Logout endpoint (default: `5/minute`)
+    *   `RATE_LIMIT_QUERY`: Query endpoint (default: `30/minute`)
+    *   `RATE_LIMIT_PUBLIC_QUERY`: Public query endpoint (default: `15/minute`)
+    *   `RATE_LIMIT_CREATE_SESSION`: Chat session creation (default: `30/minute`)
+    *   `RATE_LIMIT_UPDATE_SESSION`: Chat session updates (default: `20/minute`)
+    *   `RATE_LIMIT_DELETE_SESSION`: Chat session deletion (default: `20/minute`)
 
 **Frontend (`frontend/.env`):**
 
 *   `REACT_APP_API_URL`: The base URL the frontend uses to make API calls. Set to `https://localhost` for local Docker/Nginx setup.
+*   Rate limit per endpoint (all optional with defaults):
+    *   `RATE_LIMIT_LOGIN`: Login endpoint (default: `5/minute`)
+    *   `RATE_LIMIT_REGISTER`: Registration endpoint (default: `2/hour`)
+    *   `RATE_LIMIT_LOGOUT`: Logout endpoint (default: `5/minute`)
+    *   `RATE_LIMIT_QUERY`: Query endpoint (default: `30/minute`)
+    *   `RATE_LIMIT_PUBLIC_QUERY`: Public query endpoint (default: `15/minute`)
+    *   `RATE_LIMIT_CREATE_SESSION`: Chat session creation (default: `30/minute`)
+    *   `RATE_LIMIT_UPDATE_SESSION`: Chat session updates (default: `20/minute`)
+    *   `RATE_LIMIT_DELETE_SESSION`: Chat session deletion (default: `20/minute`)
+
+## Security Features
+
+*   **JWT Authentication:**
+    *   Access tokens are stored in HttpOnly cookies
+    *   Tokens expire after configurable duration
+    *   Secure and SameSite cookie attributes enabled
+
+*   **CSRF Protection:**
+    *   Double-submit cookie pattern
+    *   CSRF token stored in non-HttpOnly cookie
+    *   Token validation for all state-changing operations
+
+*   **Rate Limiting:**
+    *   Configurable per endpoint via environment variables
+    *   Default rate limit for unspecified endpoints
+    *   Can be globally enabled/disabled
+    *   Limits applied to:
+        *   Authentication endpoints (login, register, logout)
+        *   Query endpoints (authenticated and public)
+        *   Chat session operations
+        *   Message operations
+
+*   **XSS Prevention:** Markdown responses are sanitized using DOMPurify before rendering to prevent Cross-Site Scripting attacks.
+
+*   **Security Headers:**
+    *   `X-Content-Type-Options: nosniff`
+    *   `X-Frame-Options: DENY`
+    *   `X-XSS-Protection: 1; mode=block`
+    *   `Strict-Transport-Security: max-age=31536000; includeSubDomains`
 
 ## Nginx and Content Security Policy (CSP)
 

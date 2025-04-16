@@ -29,8 +29,16 @@ import {
     MenuList,
     MenuItem,
     Avatar,
+    Drawer,
+    DrawerBody,
+    DrawerHeader,
+    DrawerOverlay,
+    DrawerContent,
+    DrawerCloseButton,
+    useDisclosure,
 } from '@chakra-ui/react';
 import { useMutation, useQuery, useQueryClient } from 'react-query';
+import { HamburgerIcon } from '@chakra-ui/icons';
 // Import ChatMessage from api
 import { api, ChatMessage } from '../services/api';
 import { Message } from './Message';
@@ -53,6 +61,8 @@ interface UIMessage {
 interface ChatInterfaceProps {
     isAuthenticated: boolean;
     userRole: UserRole | null; // Add userRole prop
+    isDrawerOpen: boolean; // Prop for drawer state
+    onDrawerClose: () => void; // Prop for closing drawer
 }
 
 // Helper function to generate title from first message
@@ -64,7 +74,13 @@ const generateTitleFromMessage = (message: string): string => {
 };
 
 
-export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isAuthenticated, userRole }) => { // Destructure userRole
+export const ChatInterface: React.FC<ChatInterfaceProps> = ({
+    isAuthenticated,
+    userRole,
+    isDrawerOpen, // Receive drawer state
+    onDrawerClose // Receive drawer close handler
+}) => {
+    // Removed: const { isOpen, onOpen, onClose } = useDisclosure();
     const [messages, setMessages] = useState<UIMessage[]>([]); // Use UIMessage type
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false); // For sending messages
@@ -89,16 +105,26 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isAuthenticated, u
     const menuItemSelectedBg = useColorModeValue("purple.50", "purple.900");
     const menuItemHoverBg = useColorModeValue("purple.100", "purple.800");
 
-    // Effect to update selectedPersona when auth state or userRole changes
+    // Effect to handle changes in authentication state
     useEffect(() => {
-        if (isAuthenticated && userRole) {
-            setSelectedPersona(userRole);
-        } else {
-            setSelectedPersona(UserRole.FUNCTIONAL);
-        }
         setShowGuestAlert(!isAuthenticated);
-    }, [isAuthenticated, userRole]);
-
+        if (!isAuthenticated) {
+            console.log('[ChatInterface useEffect] isAuthenticated is false. Clearing state and removing caches.');
+            // Clear local state
+            setActiveChatId(null);
+            setMessages([]);
+            setSelectedPersona(UserRole.FUNCTIONAL); // Reset persona here
+            
+            // Remove React Query caches related to chat
+            queryClient.removeQueries('chat', { exact: false }); 
+            queryClient.removeQueries('chats', { exact: false }); 
+        } else {
+            // Optional: Reset persona based on userRole when they log IN
+            if (userRole) {
+                 setSelectedPersona(userRole);
+            }
+        }
+    }, [isAuthenticated, userRole, queryClient]); // Depend on isAuthenticated and userRole
 
     // Fetch chat sessions list (only if authenticated)
     const { data: chatsData = [] } = useQuery<ChatSession[]>(
@@ -114,35 +140,40 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isAuthenticated, u
 
      // Fetch messages for the active chat session
      const { data: activeChatHistory, isLoading: isLoadingChatHistory } = useQuery<ChatSessionHistory>(
-        ['chat', activeChatId],
+        ['chat', activeChatId, isAuthenticated],
         () => api.getChatSessionHistory(parseInt(activeChatId!, 10)),
         {
-            // Re-enable the check: Disable fetch if no active chat, not authenticated, OR if this chat is currently being mutated
+            // Disable fetch if no active chat OR not authenticated
             enabled: !!activeChatId && isAuthenticated && activeChatId !== mutatingChatId,
             onSuccess: (data) => {
-                const uiMessages = data.messages.flatMap((item: ChatHistoryItem): UIMessage[] => {
-                     const userMsg: UIMessage = {
-                        id: item.message.id?.toString() || `user-${uuidv4()}`,
-                        role: 'user',
-                        content: item.message.content,
-                        timestamp: item.message.created_at,
-                        persona: 'user'
-                    };
-                    const messagesArray: UIMessage[] = [userMsg];
-                    if (item.response) {
-                        const assistantMsg: UIMessage = {
-                            id: item.response.id?.toString() || `assistant-${uuidv4()}`,
-                            role: 'assistant',
-                            content: item.response.content,
-                            timestamp: item.response.created_at,
-                            persona: item.message.role
+                // Only process and set messages if still authenticated when onSuccess runs
+                if (isAuthenticated) { 
+                    const uiMessages = data.messages.flatMap((item: ChatHistoryItem): UIMessage[] => {
+                        const userMsg: UIMessage = {
+                            id: item.message.id?.toString() || `user-${uuidv4()}`,
+                            role: 'user',
+                            content: item.message.content,
+                            timestamp: item.message.created_at,
+                            persona: 'user'
                         };
-                        messagesArray.push(assistantMsg);
-                    }
-                    return messagesArray;
-                });
-                // Update component state with fetched history
-                setMessages(uiMessages);
+                        const messagesArray: UIMessage[] = [userMsg];
+                        if (item.response) {
+                            const assistantMsg: UIMessage = {
+                                id: item.response.id?.toString() || `assistant-${uuidv4()}`,
+                                role: 'assistant',
+                                content: item.response.content,
+                                timestamp: item.response.created_at,
+                                persona: item.message.role
+                            };
+                            messagesArray.push(assistantMsg);
+                        }
+                        return messagesArray;
+                    });
+                    // Update component state with fetched history
+                    setMessages(uiMessages);
+                } else {
+                     console.log('[ChatInterface useQuery onSuccess] Fired after logout/guest mode switch. Ignoring stale data.')
+                }
             },
             onError: () => {
                 toast({ title: 'Error loading chat messages', status: 'error', duration: 3000 });
@@ -382,23 +413,53 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ isAuthenticated, u
         }
     };
 
+    // *** DEBUG LOGGING ***
+    console.log(`[ChatInterface Render] isAuthenticated: ${isAuthenticated}, activeChatId: ${activeChatId}, messages.length: ${messages.length}`);
+
     return (
-        // Outermost Flex container (Sidebar + Main Content)
-        <Flex h="calc(100vh - 60px)" position="relative" bg={bgColor}>
-            {/* Sidebar */}
-            {isAuthenticated && (
+        <Flex h="calc(100vh - 60px)" position="relative" bg={bgColor} flexDirection="row">
+            {/* Removed: Hamburger Menu Icon - Moved to Header */}
+            
+            {/* Sidebar - Always rendered, but display controlled */}
+            {/* 1. Standard Sidebar - Visible on md and up */}
+            <Box
+                display={{ base: 'none', md: 'flex' }}
+                w="250px"
+                h="full"
+                borderRight="1px" 
+                borderColor={borderColor}
+                flexShrink={0} // Prevent sidebar from shrinking
+            >
                 <ChatSidebar
-                    chats={chatsData} // Pass ChatSession[]
-                    activeChatId={activeChatId} // Pass string | null
+                    chats={chatsData}
+                    activeChatId={activeChatId}
                     onSelectChat={handleSelectChat}
-                    onDeleteChat={handleDeleteChat}
                     onNewChat={handleNewChat}
+                    onDeleteChat={handleDeleteChat}
                 />
-            )}
+            </Box>
+
+            {/* 2. Drawer Sidebar - For small screens */}
+            <Drawer isOpen={isDrawerOpen} placement="left" onClose={onDrawerClose}>
+                <DrawerOverlay />
+                <DrawerContent>
+                    <DrawerCloseButton />
+                    <DrawerHeader borderBottomWidth="1px">Chats</DrawerHeader>
+                    <DrawerBody p={0}> {/* Remove padding from DrawerBody if Sidebar has its own */}
+                        <ChatSidebar
+                            chats={chatsData}
+                            activeChatId={activeChatId}
+                            onSelectChat={(id) => { handleSelectChat(id); onDrawerClose(); }} // Use onDrawerClose
+                            onNewChat={() => { handleNewChat(); onDrawerClose(); }} // Use onDrawerClose
+                            onDeleteChat={handleDeleteChat} // Deletion might not need drawer close immediately
+                        />
+                    </DrawerBody>
+                </DrawerContent>
+            </Drawer>
 
             {/* Main chat area Flex container */}
             <Flex
-                flex="1"
+                flex={1} // Takes remaining space
                 flexDirection="column"
                 position="relative"
                 height="100%"

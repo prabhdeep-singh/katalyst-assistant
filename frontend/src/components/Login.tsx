@@ -26,12 +26,14 @@ interface LoginProps {
     onLoginSuccess: () => void;
     onNavigateToRegister: () => void;
     onContinueAsGuest?: () => void;
+    isGuestModeAllowed: boolean; // Add the new prop
 }
 
 export const Login: React.FC<LoginProps> = ({ 
     onLoginSuccess, 
     onNavigateToRegister,
-    onContinueAsGuest
+    onContinueAsGuest,
+    isGuestModeAllowed // Destructure the new prop
 }) => {
     const [showPassword, setShowPassword] = useState(false);
     const [username, setUsername] = useState('');
@@ -161,7 +163,7 @@ export const Login: React.FC<LoginProps> = ({
                             </Link>
                         </Text>
                         
-                        {onContinueAsGuest && (
+                        {isGuestModeAllowed && onContinueAsGuest && ( // Check the prop here
                             <>
                                 <Box textAlign="center" py={2}>
                                     <Text fontSize="sm" color="gray.500">or</Text>

@@ -15,6 +15,7 @@ import { FiUser } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ChatMessage } from '../services/api'; // Assuming ChatMessage is defined here or imported correctly
+import DOMPurify from 'dompurify'; // Import DOMPurify
 import { UserRole } from '../types'; // Assuming UIMessage uses role from UserRole
 
 // Define the structure expected by the Message component props
@@ -64,6 +65,9 @@ export const Message: React.FC<MessageProps> = ({ message }) => {
         }
     };
     const personaDisplayName = getPersonaDisplayName(persona);
+
+    // Sanitize content before rendering
+    const sanitizedContent = DOMPurify.sanitize(content || '');
 
     return (
         // Flex container for the entire message row (avatar + bubble)
@@ -155,7 +159,7 @@ export const Message: React.FC<MessageProps> = ({ message }) => {
                     }
                 }}>
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {content || ''}
+                        {sanitizedContent}
                     </ReactMarkdown>
                 </Box>
             </Box>
