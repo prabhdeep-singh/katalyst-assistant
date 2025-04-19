@@ -1,4 +1,6 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession # Use AsyncSession
+from sqlalchemy import select, update, delete # Import select, update, delete
+from sqlalchemy.orm import selectinload # For eager loading relationships if needed
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
@@ -15,54 +17,62 @@ from ..models.schemas import (
 
 class ChatHistoryService:
     @staticmethod
-    async def create_session(db: Session, user_id: int, title: str = "New Conversation") -> ChatSession:
+    async def create_session(db: AsyncSession, user_id: int, title: str = "New Conversation") -> ChatSession:
         """Create a new chat session for a user"""
         db_session = ChatSession(
             user_id=user_id,
             title=title
         )
         db.add(db_session)
-        db.commit()
-        db.refresh(db_session)
+        await db.commit()
+        await db.refresh(db_session)
         return db_session
     
     @staticmethod
-    async def get_user_sessions(db: Session, user_id: int) -> List[ChatSession]:
+    async def get_user_sessions(db: AsyncSession, user_id: int) -> List[ChatSession]:
         """Get all chat sessions for a user"""
-        return db.query(ChatSession).filter(ChatSession.user_id == user_id).order_by(ChatSession.updated_at.desc()).all()
+        result = await db.execute(
+            select(ChatSession)
+            .filter(ChatSession.user_id == user_id)
+            .order_by(ChatSession.updated_at.desc())
+        )
+        return result.scalars().all()
     
     @staticmethod
-    async def get_session_by_id(db: Session, session_id: int, user_id: int) -> Optional[ChatSession]:
+    async def get_session_by_id(db: AsyncSession, session_id: int, user_id: int) -> Optional[ChatSession]:
         """Get a specific chat session by ID"""
-        return db.query(ChatSession).filter(
-            ChatSession.id == session_id,
-            ChatSession.user_id == user_id
-        ).first()
+        result = await db.execute(
+            select(ChatSession).filter(
+                ChatSession.id == session_id,
+                ChatSession.user_id == user_id
+            )
+        )
+        return result.scalars().first()
     
     @staticmethod
-    async def update_session(db: Session, session_id: int, user_id: int, title: str) -> Optional[ChatSession]:
+    async def update_session(db: AsyncSession, session_id: int, user_id: int, title: str) -> Optional[ChatSession]:
         """Update a chat session title"""
         db_session = await ChatHistoryService.get_session_by_id(db, session_id, user_id)
         if db_session:
             db_session.title = title
             db_session.updated_at = datetime.utcnow()
-            db.commit()
-            db.refresh(db_session)
+            await db.commit()
+            await db.refresh(db_session)
         return db_session
     
     @staticmethod
-    async def delete_session(db: Session, session_id: int, user_id: int) -> bool:
+    async def delete_session(db: AsyncSession, session_id: int, user_id: int) -> bool:
         """Delete a chat session and all its messages"""
         db_session = await ChatHistoryService.get_session_by_id(db, session_id, user_id)
         if db_session:
-            db.delete(db_session)
-            db.commit()
+            await db.delete(db_session) # Use await
+            await db.commit()
             return True
         return False
     
     @staticmethod
     async def save_message_and_response(
-        db: Session, 
+        db: AsyncSession,
         user_id: int,
         message_data: ChatMessageCreate,
         response_data: ChatResponseCreate,
@@ -81,7 +91,7 @@ class ChatHistoryService:
             db_session = await ChatHistoryService.get_session_by_id(db, session_id, user_id)
             if db_session:
                 db_session.updated_at = datetime.utcnow()
-                db.commit()
+                await db.commit()
         
         # Save the user's query
         db_message = ChatMessage(
@@ -92,8 +102,9 @@ class ChatHistoryService:
             role=message_data.role
         )
         db.add(db_message)
-        db.commit()
-        db.refresh(db_message)
+        # Commit message first to get its ID
+        await db.commit()
+        await db.refresh(db_message)
         
         # Save the system's response
         db_response = ChatResponse(
@@ -113,7 +124,8 @@ class ChatHistoryService:
         )
         db.add(db_response_message)
         
-        db.commit()
+        # Commit response and response_message
+        await db.commit()
         
         return {
             "message": db_message,
@@ -123,7 +135,7 @@ class ChatHistoryService:
         }
     
     @staticmethod
-    async def get_session_messages(db: Session, session_id: int, user_id: int, limit: Optional[int] = None) -> List[ChatHistoryItem]: # Added limit parameter
+    async def get_session_messages(db: AsyncSession, session_id: int, user_id: int, limit: Optional[int] = None) -> List[ChatHistoryItem]: # Added limit parameter
         """Get messages in a chat session, optionally limited"""
         # Verify the session belongs to the user
         db_session = await ChatHistoryService.get_session_by_id(db, session_id, user_id)
@@ -131,7 +143,7 @@ class ChatHistoryService:
             return []
         
         # Build the query for messages, always order chronologically (ascending)
-        query = db.query(ChatMessage).filter(
+        stmt = select(ChatMessage).filter(
             ChatMessage.session_id == session_id,
             ChatMessage.message_type == "query"  # We want the user queries to pair with responses
         ).order_by(ChatMessage.created_at.asc()) # Always sort ascending
@@ -145,17 +157,22 @@ class ChatHistoryService:
             # but that's inefficient for long histories.
             # Sticking with limiting oldest for now as implemented in main.py.
             # If main.py stops sending limit, this won't apply.
-            query = query.limit(limit)
+            stmt = stmt.limit(limit)
             
         # Execute query
-        db_messages = query.all()
+        result = await db.execute(stmt)
+        db_messages = result.scalars().all()
         # No reversal needed as we query in ascending order now
         
         # Prepare the result with responses
         result = []
         for msg in db_messages:
             # Get the response associated with this message
-            db_response = db.query(ChatResponse).filter(ChatResponse.message_id == msg.id).first()
+            # Async query for response
+            response_result = await db.execute(
+                select(ChatResponse).filter(ChatResponse.message_id == msg.id)
+            )
+            db_response = response_result.scalars().first()
             
             # Create a ChatHistoryItem
             history_item = ChatHistoryItem(

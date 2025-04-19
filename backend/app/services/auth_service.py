@@ -4,7 +4,8 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 import os
 from fastapi import Depends, HTTPException, status, Request, Cookie # Import Request and Cookie
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession # Use AsyncSession
+from sqlalchemy import select # Import select for async queries
 # Removed OAuth2PasswordBearer import as it's no longer used
 from sqlalchemy.orm import Session
 from ..models.schemas import TokenData, UserLogin
@@ -27,38 +28,8 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 
 # Removed OAuth2PasswordBearer definition
 
-# Path to users file
-# NOTE: This dual storage (JSON + DB) is complex and prone to inconsistency.
-# Ideally, rely solely on the database as the source of truth.
-USER_DB_PATH = os.path.join(os.path.dirname(__file__), '../data/users.json')
-
-# Create users directory if it doesn't exist
-os.makedirs(os.path.dirname(USER_DB_PATH), exist_ok=True)
-
-def get_users() -> Dict[str, Any]:
-    """Load users from JSON file or create empty dict if file doesn't exist"""
-    try:
-        with open(USER_DB_PATH, 'r') as f:
-            # Ensure the loaded data has a "users" key which is a list
-            data = json.load(f)
-            if isinstance(data, dict) and isinstance(data.get("users"), list):
-                return data
-            else:
-                logger.warning("users.json format is incorrect or missing 'users' list. Resetting.")
-                return {"users": []}
-    except (FileNotFoundError, json.JSONDecodeError):
-        logger.info("users.json not found or invalid JSON. Returning empty users list.")
-        return {"users": []}
-
-def save_users(users_data: Dict[str, Any]) -> None:
-    """Save users to JSON file"""
-    try:
-        with open(USER_DB_PATH, 'w') as f:
-            json.dump(users_data, f, indent=2)
-    except Exception as e:
-        logger.error(f"Error saving users to JSON: {e}")
-
-
+# JSON user storage functions (get_users, save_users) and USER_DB_PATH removed.
+# Database is the sole source of truth.
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify that a plain password matches the hashed password"""
     # Handle potential errors during verification (e.g., invalid hash format)
@@ -74,13 +45,15 @@ def get_password_hash(password: str) -> str:
 
 # Removed get_user function as it's replaced by DB query in authenticate_user
 
-def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
-    """Authenticate a user against the SQL database."""
-    logger.info(f"Attempting to authenticate user (DB): {username}")
-    db: Session = next(get_db())
+async def authenticate_user(username: str, password: str, db: AsyncSession) -> Optional[Dict[str, Any]]: # Removed Depends(get_db)
+    """Authenticate a user against the SQL database (async)."""
+    logger.info(f"Attempting to authenticate user (DB async): {username}")
     user: Optional[User] = None
     try:
-        user = db.query(User).filter(User.username == username).first()
+        # Async query
+        result = await db.execute(select(User).filter(User.username == username))
+        user = result.scalars().first()
+
         if not user:
             logger.warning(f"Authentication failed: User '{username}' not found in DB.")
             return None
@@ -88,14 +61,14 @@ def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
             logger.warning(f"Authentication failed: Invalid password for user '{username}'.")
             return None
 
-        logger.info(f"Authentication successful for user (DB): {username}")
+        logger.info(f"Authentication successful for user (DB async): {username}")
         # Return user info needed for token creation
         return {"username": user.username, "role": user.role, "id": user.id}
     except Exception as e:
         logger.error(f"Error during DB authentication for user '{username}': {e}", exc_info=True)
+        # No rollback needed for read operation
         return None
-    finally:
-        db.close()
+    # No finally db.close() needed with async context manager in get_db
 
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
@@ -110,8 +83,8 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     return encoded_jwt
 
 async def get_current_user(
-    # Read the token from a cookie named '__Host-access_token_cookie'
-    access_token_cookie: Optional[str] = Cookie(None)
+    access_token_cookie: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db) # Inject AsyncSession
 ) -> Dict[str, Any]:
     """Get the current user from JWT token, verifying against DB."""
     credentials_exception = HTTPException(
@@ -119,7 +92,7 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    db: Session = next(get_db())
+    # db: Session = next(get_db()) # Removed, using injected db
     try:
         # Check if the cookie exists
         if access_token_cookie is None:
@@ -135,7 +108,9 @@ async def get_current_user(
         token_data = TokenData(username=username, role=token_role) # Include role
 
         # Fetch user details from DB
-        user = db.query(User).filter(User.username == token_data.username).first()
+        # Async query
+        result = await db.execute(select(User).filter(User.username == token_data.username))
+        user = result.scalars().first()
         if user is None:
             logger.warning(f"User '{token_data.username}' from token not found in DB.")
             raise credentials_exception
@@ -159,21 +134,19 @@ async def get_current_user(
     except Exception as e:
         logger.error(f"Error in get_current_user: {e}", exc_info=True)
         raise credentials_exception
-    finally:
-        db.close()
+    # No finally db.close() needed with async context manager in get_db
 
 
-def create_user(username: str, password: str, role: str) -> Optional[Dict[str, Any]]:
-    """Create a new user, prioritizing SQL DB as source of truth."""
-    logger.info(f"Attempting to create user: {username}")
-    db: Session = next(get_db())
-    db_user_instance: Optional[User] = None # Renamed to avoid confusion with return dict
-    users_data = get_users() # Still load JSON for potential update
+async def create_user(username: str, password: str, role: str, db: AsyncSession) -> Optional[Dict[str, Any]]: # Removed Depends(get_db)
+    """Create a new user, prioritizing SQL DB as source of truth (async)."""
+    logger.info(f"Attempting to create user (async): {username}")
+    db_user_instance: Optional[User] = None
 
     try:
-        # 1. Check if username exists in SQL Database (Primary Check)
-        logger.info(f"Checking DB for existing user: {username}")
-        db_exists = db.query(User).filter(User.username == username).first() is not None
+        # 1. Check if username exists in SQL Database (Primary Check - async)
+        logger.info(f"Checking DB for existing user (async): {username}")
+        result = await db.execute(select(User).filter(User.username == username))
+        db_exists = result.scalars().first() is not None
         logger.info(f"DB check result for {username}: exists={db_exists}")
 
         if db_exists:
@@ -192,33 +165,16 @@ def create_user(username: str, password: str, role: str) -> Optional[Dict[str, A
             role=role
         )
 
-        # 4. Add to DB session and commit
+        # 4. Add to DB session and commit (async)
         logger.info(f"Adding user {username} to DB session.")
         db.add(db_user_instance)
-        logger.info(f"Committing transaction for user: {username}")
-        db.commit()
-        logger.info(f"Refreshing DB user instance for: {username}")
-        db.refresh(db_user_instance) # Get the generated ID and other defaults
+        logger.info(f"Committing transaction for user (async): {username}")
+        await db.commit()
+        logger.info(f"Refreshing DB user instance for (async): {username}")
+        await db.refresh(db_user_instance) # Get the generated ID and other defaults
         logger.info(f"User '{username}' successfully created in DB with ID {db_user_instance.id}.")
 
-        # 5. Update and Save JSON file (Now that DB is confirmed)
-        try:
-            logger.info(f"Attempting to save user {username} (ID: {db_user_instance.id}) to JSON.")
-            # Create dict for JSON, using the DB-generated ID
-            user_dict_for_json = {
-                "id": db_user_instance.id,
-                "username": username,
-                "hashed_password": hashed_password, # Storing hash in JSON too
-                "role": role
-            }
-            # Ensure "users" list exists
-            users_data.setdefault("users", []).append(user_dict_for_json)
-            save_users(users_data)
-            logger.info(f"User '{username}' also saved to JSON.")
-        except Exception as json_e:
-            # Log error but don't fail the whole process if JSON save fails
-            logger.error(f"Warning: Failed to save user '{username}' to JSON after DB creation: {json_e}")
-
+        # 5. JSON file update removed. DB is the source of truth.
         # 6. Return user info (excluding password hash)
         user_info = {
             "id": db_user_instance.id,
@@ -230,30 +186,30 @@ def create_user(username: str, password: str, role: str) -> Optional[Dict[str, A
 
     except Exception as e:
         logger.error(f"!!! Exception during DB operation for user '{username}': {str(e)}", exc_info=True) # Log stack trace
-        db.rollback() # Rollback DB transaction on any error during DB phase
+        await db.rollback() # Rollback DB transaction on any error during DB phase (async)
         logger.info(f"DB transaction rolled back for user: {username}")
         return None # Indicate failure
 
-    finally:
-        logger.info(f"Closing DB session for create_user request: {username}")
-        db.close() # Ensure session is always closed
+    # No finally db.close() needed with async context manager in get_db
 
 
-def get_user_id_from_username(username: str) -> Optional[int]:
-    """Get user ID from username (querying DB)."""
-    logger.info(f"Getting user ID for username (DB): {username}")
-    db: Session = next(get_db())
+async def get_user_id_from_username(db: AsyncSession, username: str) -> Optional[int]:
+    """Get user ID from username (querying DB async). Pass DB session explicitly."""
+    logger.info(f"Getting user ID for username (DB async): {username}")
     user: Optional[User] = None
     try:
-        user = db.query(User).filter(User.username == username).first()
+        # Async query
+        result = await db.execute(select(User).filter(User.username == username))
+        user = result.scalars().first()
+
         if user:
             logger.info(f"Found user ID {user.id} for username {username}")
             return user.id
         else:
-            logger.warning(f"Could not find user ID for username (DB): {username}")
+            logger.warning(f"Could not find user ID for username (DB async): {username}")
             return None
     except Exception as e:
          logger.error(f"Error getting user ID for '{username}': {e}", exc_info=True)
+         # No rollback needed for read operation
          return None
-    finally:
-        db.close()
+    # No finally db.close() needed

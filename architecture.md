@@ -43,7 +43,7 @@ The application consists of four main containerized services defined in `docker-
     *   Provides RESTful API endpoints (`/api/...`).
     *   User registration and authentication (password hashing with `passlib`, JWT generation/validation with `python-jose`).
     *   CRUD operations for chat sessions and messages.
-    *   Interaction with the PostgreSQL database via SQLAlchemy ORM.
+    *   Asynchronous interaction with the PostgreSQL database via SQLAlchemy ORM (using `asyncpg` driver).
     *   Prompt generation based on user query, persona, and history (`PromptEngine`).
     *   Communication with the external LLM API (Google Gemini) via `aiohttp` (`EnhancedLLMWrapper`).
     *   Configurable rate limiting per endpoint (`SlowAPI`).

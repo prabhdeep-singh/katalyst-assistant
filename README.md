@@ -52,7 +52,7 @@ An AI-powered chat assistant designed to answer questions about ERP systems (Cur
         cp backend/.env.example backend/.env
         ```
     *   Edit `backend/.env` with your actual values:
-        *   `DATABASE_URL`: Keep the default `postgresql://postgres:password@db:5432/katalyst_assistant` if using the included Docker Compose setup. Change the password if desired (and update in `docker-compose.yml` too).
+        *   `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`, `DB_NAME`: Set these according to your database setup. For the included Docker Compose setup, the defaults are usually `postgres`, `password`, `db`, `5432`, `katalyst_assistant`. If you change the password here, update it in `docker-compose.yml` as well.
         *   `GEMINI_API_KEY`: **Required.** Paste your Gemini API key here.
         *   `LLM_MODEL`: (Optional) Change the Gemini model if desired (e.g., `gemini-1.5-flash`). Defaults to `gemini-2.0-flash-lite`.
         *   `SECRET_KEY`: **Required.** Generate a strong secret key for JWT signing. You can use `openssl rand -hex 32` in your terminal to generate one and paste it here.
@@ -110,7 +110,11 @@ Environment variables are used for configuration. Create `.env` files based on t
 
 **Backend (`backend/.env`):**
 
-*   `DATABASE_URL`: PostgreSQL connection string (e.g., `postgresql://postgres:password@db:5432/katalyst_assistant`).
+*   `DB_USER`: Database username.
+*   `DB_PASSWORD`: Database password.
+*   `DB_HOST`: Database host (e.g., `db` for Docker Compose, `localhost`, or cloud instance address).
+*   `DB_PORT`: Database port (default: `5432`).
+*   `DB_NAME`: Database name.
 *   `GEMINI_API_KEY`: Your Google Gemini API key.
 *   `LLM_MODEL`: The Gemini model to use (default: `gemini-2.0-flash-lite`).
 *   `SECRET_KEY`: A strong secret for signing JWT tokens.
@@ -132,15 +136,6 @@ Environment variables are used for configuration. Create `.env` files based on t
 **Frontend (`frontend/.env`):**
 
 *   `REACT_APP_API_URL`: The base URL the frontend uses to make API calls. Set to `https://localhost` for local Docker/Nginx setup.
-*   Rate limit per endpoint (all optional with defaults):
-    *   `RATE_LIMIT_LOGIN`: Login endpoint (default: `5/minute`)
-    *   `RATE_LIMIT_REGISTER`: Registration endpoint (default: `2/hour`)
-    *   `RATE_LIMIT_LOGOUT`: Logout endpoint (default: `5/minute`)
-    *   `RATE_LIMIT_QUERY`: Query endpoint (default: `30/minute`)
-    *   `RATE_LIMIT_PUBLIC_QUERY`: Public query endpoint (default: `15/minute`)
-    *   `RATE_LIMIT_CREATE_SESSION`: Chat session creation (default: `30/minute`)
-    *   `RATE_LIMIT_UPDATE_SESSION`: Chat session updates (default: `20/minute`)
-    *   `RATE_LIMIT_DELETE_SESSION`: Chat session deletion (default: `20/minute`)
 
 ## Security Features
 

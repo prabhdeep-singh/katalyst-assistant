@@ -7,7 +7,7 @@ from datetime import timedelta
 import json
 from dotenv import load_dotenv
 from typing import Dict, Any, List, Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession # Use AsyncSession
 import logging
 import traceback
 
@@ -46,34 +46,46 @@ if not os.getenv("SECRET_KEY"):
     # import sys
     # sys.exit("Application cannot start without a SECRET_KEY.")
 
-# Create database tables if they don't exist
-create_tables()
+# --- FastAPI App Initialization ---
+# Create the app instance *before* configuring rate limiting or startup events
+app = FastAPI()
 
 # --- Rate Limiting Setup ---
 # Check if rate limiting is enabled (default to True)
 rate_limit_enabled = os.getenv("RATE_LIMIT_ENABLED", "true").lower() in ["true", "1", "yes"]
 guest_mode_enabled = os.getenv("GUEST_MODE_ENABLED", "true").lower() in ["true", "1", "yes"]
 
+# Define DummyLimiter first so it's always available
+class DummyLimiter:
+    def limit(self, *args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
+
 if rate_limit_enabled:
-    limiter = Limiter(
+    limiter = Limiter( # Assign to limiter variable
         key_func=get_remote_address,
-        default_limits=[os.getenv("RATE_LIMIT_DEFAULT", "60/minute")]  # Use environment variable or default to 60/minute
+        default_limits=[os.getenv("RATE_LIMIT_DEFAULT", "60/minute")]
     )
-    app = FastAPI()
+    # Configure the existing app instance
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     logger.info("Rate limiting is enabled with default limit: " + os.getenv("RATE_LIMIT_DEFAULT", "60/minute"))
 else:
-    # Create a dummy limiter that doesn't actually limit
-    class DummyLimiter:
-        def limit(self, *args, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-    
-    limiter = DummyLimiter()
-    app = FastAPI()
+    limiter = DummyLimiter() # Assign to limiter variable
+    # No need to configure app state for the dummy limiter
     logger.info("Rate limiting is disabled")
+# --- Async Startup Event ---
+# Define the startup event *after* app is created
+@app.on_event("startup")
+async def startup_event():
+    """Create database tables on startup."""
+    logger.info("Running startup event...")
+    await create_tables() # Await the async function
+    logger.info("Startup event finished.")
+# --- End Async Startup Event ---
+    
+# These lines are now handled within the corrected if/else block above
 
 # --- Middleware Setup ---
 
@@ -177,11 +189,13 @@ rate_limit_update_message = os.getenv("RATE_LIMIT_UPDATE_MESSAGE", "20/minute")
 async def login_for_access_token(
     request: Request,
     response: Response,
-    form_data: OAuth2PasswordRequestForm = Depends()
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db) # Add db dependency
 ):
     """Authenticate user, set HttpOnly auth cookie and CSRF cookie + token."""
     logger.info(f"Login attempt for user: {form_data.username}")
-    user = authenticate_user(form_data.username, form_data.password)
+    # Authenticate user (needs to be async now)
+    user = await authenticate_user(form_data.username, form_data.password, db=db) # Pass db
     if not user:
         logger.warning(f"Login failed for user: {form_data.username}")
         raise HTTPException(
@@ -233,10 +247,11 @@ async def login_for_access_token(
 
 @app.post("/api/register")
 @limiter.limit(rate_limit_register)
-async def register_user(request: Request, user_data: UserCreate):
+async def register_user(request: Request, user_data: UserCreate, db: AsyncSession = Depends(get_db)): # Add db dependency
     """Register a new user."""
     logger.info(f"Registration attempt for user: {user_data.username}")
-    user = create_user(user_data.username, user_data.password, user_data.role.value)
+    # Create user (needs to be async now)
+    user = await create_user(user_data.username, user_data.password, user_data.role.value, db=db) # Pass db
     if not user:
         logger.warning(f"Registration failed for user: {user_data.username} (Username likely exists)")
         raise HTTPException(
@@ -281,7 +296,7 @@ async def process_query(
     request: Request,
     query_request: QueryRequest,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db), # Use AsyncSession
     csrf_check: None = Depends(verify_csrf)
 ):
     """Process queries from authenticated users, include history, and save"""
@@ -291,7 +306,8 @@ async def process_query(
 
     try:
         logger.info(f"Processing query for user: {current_user.get('username')}, session: {query_request.session_id}, role: {query_request.role}")
-        user_id = get_user_id_from_username(current_user.get("username"))
+        # Get user ID (needs to be async now)
+        user_id = await get_user_id_from_username(db, current_user.get("username"))
         if not user_id:
             logger.error(f"Could not find user ID for username: {current_user.get('username')}")
             raise HTTPException(status_code=404, detail="User not found")
@@ -460,10 +476,11 @@ async def submit_feedback(
 async def get_chat_sessions(
     request: Request, # Add request
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db) # Use AsyncSession
 ):
     """Get all chat sessions for the current user"""
-    user_id = get_user_id_from_username(current_user["username"])
+    # Get user ID (needs to be async now)
+    user_id = await get_user_id_from_username(db, current_user["username"])
     if not user_id:
         raise HTTPException(status_code=404, detail="User not found")
     sessions = await ChatHistoryService.get_user_sessions(db, user_id)
@@ -475,11 +492,12 @@ async def create_chat_session(
     request: Request,
     session_data: ChatSessionCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db), # Use AsyncSession
     csrf_check: None = Depends(verify_csrf)
 ):
     """Create a new chat session"""
-    user_id = get_user_id_from_username(current_user["username"])
+    # Get user ID (needs to be async now)
+    user_id = await get_user_id_from_username(db, current_user["username"])
     if not user_id:
         raise HTTPException(status_code=404, detail="User not found")
     session = await ChatHistoryService.create_session(db, user_id, session_data.title)
@@ -492,10 +510,11 @@ async def get_chat_session_history(
     request: Request, # Add request
     session_id: int,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db) # Use AsyncSession
 ):
     """Get chat history for a specific session"""
-    user_id = get_user_id_from_username(current_user["username"])
+    # Get user ID (needs to be async now)
+    user_id = await get_user_id_from_username(db, current_user["username"])
     if not user_id:
         raise HTTPException(status_code=404, detail="User not found")
     session = await ChatHistoryService.get_session_by_id(db, session_id, user_id)
@@ -511,11 +530,12 @@ async def update_chat_session(
     session_id: int,
     session_data: ChatSessionCreate,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db), # Use AsyncSession
     csrf_check: None = Depends(verify_csrf)
 ):
     """Update a chat session's title"""
-    user_id = get_user_id_from_username(current_user["username"])
+    # Get user ID (needs to be async now)
+    user_id = await get_user_id_from_username(db, current_user["username"])
     if not user_id:
         raise HTTPException(status_code=404, detail="User not found")
     session = await ChatHistoryService.update_session(db, session_id, user_id, session_data.title)
@@ -530,11 +550,12 @@ async def delete_chat_session(
     request: Request,
     session_id: int,
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db), # Use AsyncSession
     csrf_check: None = Depends(verify_csrf)
 ):
     """Delete a chat session and all its messages"""
-    user_id = get_user_id_from_username(current_user["username"])
+    # Get user ID (needs to be async now)
+    user_id = await get_user_id_from_username(db, current_user["username"])
     if not user_id:
         raise HTTPException(status_code=404, detail="User not found")
     success = await ChatHistoryService.delete_session(db, session_id, user_id)
@@ -552,9 +573,10 @@ async def update_chat_message(
     message_data: ChatMessageUpdate,
     csrf_check: None = Depends(verify_csrf),
     current_user: Dict[str, Any] = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db) # Use AsyncSession
 ):
-    user_id = get_user_id_from_username(current_user["username"])
+    # Get user ID (needs to be async now)
+    user_id = await get_user_id_from_username(db, current_user["username"])
     if not user_id:
         raise HTTPException(status_code=404, detail="User not found")
     
